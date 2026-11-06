@@ -33,7 +33,8 @@ The full comparison, with the reason behind each difference, is in
 |---|---|
 | [Getting Started](Documentation~/GettingStarted.md) | first: a step-by-step tutorial that builds a small complete game |
 | [Design Guide](Documentation~/DesignGuide.md) | every day: common decisions with "don't / what goes wrong / do / why" |
-| [Architecture](Documentation~/Architecture.md) | for reference: roles, the life of an action, visibility rules, debugging tools |
+| [Architecture](Documentation~/Architecture.md) | to understand the design: roles, the life of an action, visibility rules, Mosaic and ECS |
+| [Reference](Documentation~/Reference.md) | to look something up: every type of the package, its members and pitfalls |
 
 ## Installation
 

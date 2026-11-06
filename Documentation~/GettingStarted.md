@@ -23,7 +23,8 @@ It is a tiny game on purpose. Every part of it shows one piece of Mosaic:
 Plan about two hours. Each step ends with something that compiles and runs, so you can stop at any point.
 
 > When you want to know *why* something is done a certain way, see the [Design Guide](DesignGuide.md).
-> For the full description of roles and rules, see [Architecture](Architecture.md).
+> For the full description of roles and rules, see [Architecture](Architecture.md); to look up a class, see the
+> [Reference](Reference.md).
 
 ---
 
