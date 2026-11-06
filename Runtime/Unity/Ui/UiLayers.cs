@@ -13,6 +13,7 @@ namespace Mosaic.Ui
         private readonly List<UiPopup> _popups = new List<UiPopup>();
         private readonly List<UiOverlay> _overlays = new List<UiOverlay>();
         private readonly List<(Key Key, UiWindow Window)> _hotkeys = new List<(Key, UiWindow)>();
+        private readonly List<UiWindow> _keptViews = new List<UiWindow>();
 
         private UiScreen _screen;
         private bool _pauseRequested;
@@ -84,7 +85,9 @@ namespace Mosaic.Ui
             if (Focused == window)
                 Focused = _windows.Count > 0 ? _windows[_windows.Count - 1] : null;
             window.Closed();
-            window.DestroyView();
+            window.ReleaseView();
+            if (window.HasView && !_keptViews.Contains(window))
+                _keptViews.Add(window);
             UpdatePause();
         }
 
@@ -153,14 +156,26 @@ namespace Mosaic.Ui
         public void Dispose()
         {
             CloseAll();
+            DestroyKeptViews();
             if (Root != null)
                 UnityEngine.Object.Destroy(Root.gameObject);
         }
 
         internal void SetScreen(UiScreen screen)
         {
+            if (screen != _screen)
+                DestroyKeptViews();
+
             _screen = screen;
             _pauseRequested = false;
+        }
+
+        private void DestroyKeptViews()
+        {
+            foreach (var window in _keptViews)
+                if (!window.IsOpen)
+                    window.DestroyView();
+            _keptViews.Clear();
         }
 
         internal void CloseAll()

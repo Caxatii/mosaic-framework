@@ -13,17 +13,26 @@ reference Unity, so the whole game can be built and tested with regular .NET, an
 - **Debugging**: simulation trace and world inspector in the editor, match recording and exact replay.
 - **UI shell**: screens that follow the domain state machine, windows, popups, input layers, entity views with pooling.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the roles, the life of an action, visibility rules and debugging tools.
+## Documentation
+
+| Read | When |
+|---|---|
+| [Getting Started](Documentation~/GettingStarted.md) | first: a step-by-step tutorial that builds a small complete game |
+| [Design Guide](Documentation~/DesignGuide.md) | every day: common decisions with "don't / what goes wrong / do / why" |
+| [Architecture](Documentation~/Architecture.md) | for reference: roles, the life of an action, visibility rules, debugging tools |
 
 ## Installation
 
-Unity 6000.3 or newer. In **Window > Package Manager > + > Add package from git URL**:
+Unity 2021.3 or newer (tested on 6000.3; if something doesn't work on an older version, please open an issue).
+In **Window > Package Manager > + > Add package from git URL**:
 
 ```
 https://github.com/Caxatii/mosaic-framework.git
 ```
 
-Dependencies (`com.unity.ugui`, `com.unity.inputsystem`) are installed automatically.
+Dependencies (`com.unity.ugui`, `com.unity.inputsystem`) are installed automatically. On Unity 2021 and 2022
+the project also needs the **TextMeshPro** package (it is installed in the default project templates; in Unity 6
+it is part of uGUI).
 
 ## Quick start
 

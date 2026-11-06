@@ -1,9 +1,9 @@
 {
   "name": "com.mosaic.framework",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Mosaic Framework",
   "description": "Game architecture with the logic in plain C#: entities and components, command and event buses, simulation actions, state machines, match recording and replay, UI shell.",
-  "unity": "6000.3",
+  "unity": "2021.3",
   "license": "MIT",
   "author": {
     "name": "Caxatii"
@@ -23,7 +23,7 @@
     "commands"
   ],
   "dependencies": {
-    "com.unity.ugui": "2.0.0",
-    "com.unity.inputsystem": "1.19.0"
+    "com.unity.ugui": "1.0.0",
+    "com.unity.inputsystem": "1.7.0"
   }
 }
