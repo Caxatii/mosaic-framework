@@ -22,7 +22,9 @@ namespace Mosaic.Core
             var version = store.Version;
             for (var i = 0; i < store.Count; i++)
             {
-                Tick(World.EntityAt(store.OwnerAt(i)), store.ItemAt(i), deltaTime);
+                var index = store.OwnerAt(i);
+                if (World.IsAliveAt(index))
+                    Tick(World.EntityAt(index), store.ItemAt(i), deltaTime);
                 StoreGuard.Check(store, version);
             }
         }
@@ -52,7 +54,7 @@ namespace Mosaic.Core
                 for (var i = 0; i < first.Count; i++)
                 {
                     var index = first.OwnerAt(i);
-                    if (second.Get(index) is { } other)
+                    if (World.IsAliveAt(index) && second.Get(index) is { } other)
                         Tick(World.EntityAt(index), first.ItemAt(i), other, deltaTime);
                     StoreGuard.Check(first, version);
                 }
@@ -63,7 +65,7 @@ namespace Mosaic.Core
                 for (var i = 0; i < second.Count; i++)
                 {
                     var index = second.OwnerAt(i);
-                    if (first.Get(index) is { } other)
+                    if (World.IsAliveAt(index) && first.Get(index) is { } other)
                         Tick(World.EntityAt(index), other, second.ItemAt(i), deltaTime);
                     StoreGuard.Check(second, version);
                 }
@@ -95,7 +97,7 @@ namespace Mosaic.Core
             for (var i = 0; i < first.Count; i++)
             {
                 var index = first.OwnerAt(i);
-                if (second.Get(index) is { } b && third.Get(index) is { } c)
+                if (World.IsAliveAt(index) && second.Get(index) is { } b && third.Get(index) is { } c)
                     Tick(World.EntityAt(index), first.ItemAt(i), b, c, deltaTime);
                 StoreGuard.Check(first, version);
             }

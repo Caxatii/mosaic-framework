@@ -16,7 +16,8 @@ namespace Mosaic.Core
     /// <summary>
     /// Stores entities and their components. Inside a Simulation action (deferred mode):
     /// an entity spawned in the action is "being built" and sees its own components through Get, but appears in queries only after the action;
-    /// Add, Remove and Destroy on existing entities are buffered and become visible after the action.
+    /// Add and Remove on existing entities are buffered and become visible after the action;
+    /// Destroy makes the entity unavailable at once, and its slot is released after the action.
     /// </summary>
     public sealed class World
     {
@@ -98,6 +99,8 @@ namespace Mosaic.Core
         }
 
         internal Entity EntityAt(int index) => new Entity(new EntityId(index, _generations[index]), this);
+
+        internal bool IsAliveAt(int index) => _alive[index];
 
         internal ComponentStore<T> StoreOf<T>() where T : class, IModel
         {
@@ -191,14 +194,22 @@ namespace Mosaic.Core
                 TrackPending(id, typeof(T));
         }
 
+        /// <summary>
+        /// The entity becomes unavailable at once: IsAlive is false, Get returns null, queries and systems skip it,
+        /// commands to it are rejected. Inside an action its slot is released and EntityDestroyed is published
+        /// when the action ends.
+        /// </summary>
         public void Destroy(EntityId id)
         {
             EnsureAlive(id);
 
+            _alive[id.Index] = false;
+            Count--;
+
             if (IsDeferred)
                 _pending.Add(PendingChange.Destroy(id));
             else
-                ApplyDestroy(id);
+                ReleaseSlot(id);
         }
 
         public EntityQuery<T> Query<T>() where T : class, IModel => new EntityQuery<T>(this, StoreOf<T>());
@@ -225,15 +236,21 @@ namespace Mosaic.Core
             for (var i = 0; i < _pending.Count; i++)
             {
                 var change = _pending[i];
+
+                if (change.Kind == ChangeKind.Destroy)
+                {
+                    if (_generations[change.Id.Index] == change.Id.Generation)
+                        ReleaseSlot(change.Id);
+                    continue;
+                }
+
                 if (!IsAlive(change.Id))
                     continue;
 
-                switch (change.Kind)
-                {
-                    case ChangeKind.Add: ApplyAdd(change.Id, change.Component); break;
-                    case ChangeKind.Remove: ApplyRemove(change.Id, change.ComponentType); break;
-                    case ChangeKind.Destroy: ApplyDestroy(change.Id); break;
-                }
+                if (change.Kind == ChangeKind.Add)
+                    ApplyAdd(change.Id, change.Component);
+                else
+                    ApplyRemove(change.Id, change.ComponentType);
             }
 
             _pending.Clear();
@@ -305,16 +322,14 @@ namespace Mosaic.Core
                 store.Remove(id.Index);
         }
 
-        private void ApplyDestroy(EntityId id)
+        private void ReleaseSlot(EntityId id)
         {
             foreach (var store in _stores)
                 store?.Remove(id.Index);
 
-            _alive[id.Index] = false;
             unchecked { _generations[id.Index]++; }
             _freeSlots.Enqueue(id.Index);
             _destroyed.Add(id);
-            Count--;
         }
 
         private void EnsureAlive(EntityId id)

@@ -118,7 +118,7 @@ namespace Mosaic.Core
             while (++_position < _driver.Count)
             {
                 var entity = _driver.OwnerAt(_position);
-                if ((_also == null || _also.Has(entity)) && (_andAlso == null || _andAlso.Has(entity)))
+                if (_world.IsAliveAt(entity) && (_also == null || _also.Has(entity)) && (_andAlso == null || _andAlso.Has(entity)))
                     return true;
             }
 

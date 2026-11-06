@@ -50,7 +50,7 @@ namespace Mosaic.Core.Tests
         }
 
         [Test]
-        public void Deferred_changes_are_invisible_until_flush()
+        public void Component_changes_are_invisible_until_flush_but_destruction_is_immediate()
         {
             var world = new World();
             var entity = world.CreateEntity();
@@ -64,10 +64,11 @@ namespace Mosaic.Core.Tests
                 Assert.That(entity.Has<Marker>(), Is.True);
 
                 entity.Destroy();
-                Assert.That(entity.IsAlive, Is.True, "destruction is deferred until Flush");
+                Assert.That(entity.IsAlive, Is.False, "a destroyed entity is unavailable at once");
+                Assert.That(world.DrainDestroyed(), Is.Empty, "its slot is released at Flush");
 
                 world.Flush();
-                Assert.That(entity.IsAlive, Is.False);
+                Assert.That(world.DrainDestroyed(), Is.EqualTo(new[] { entity.Id }));
             }
         }
 

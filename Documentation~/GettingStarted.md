@@ -133,6 +133,11 @@ that has a wallet". A coin is "something with a position, that is worth some mon
 A **feature** is one area of the game (movement, coins, combat). Each feature has its components and the classes
 that work with them. Let's build movement.
 
+> **Know ECS already?** Entities, components and systems work the way you expect. The main differences: components
+> are classes that guard their own rules, only one class per feature (its Operations) may change them, and input
+> arrives as commands instead of input components. Why it is designed this way:
+> [Architecture, section 2](Architecture.md#2-mosaic-and-ecs).
+
 ### 2.1 Components: the data
 
 A component holds the data of one aspect of an entity. Its fields can only be changed through `internal` methods,
@@ -258,11 +263,11 @@ namespace CoinRush.Movement
 
     internal sealed class MovementCommandHandler : CommandHandler
     {
-        private readonly MovementOperations _movement;
+        private readonly MovementOperations _operations;
 
-        public MovementCommandHandler(GameplayContext context, MovementOperations movement) : base(context)
+        public MovementCommandHandler(GameplayContext context, MovementOperations operations) : base(context)
         {
-            _movement = movement;
+            _operations = operations;
             On<MoveCommand>(Move);
         }
 
@@ -271,7 +276,7 @@ namespace CoinRush.Movement
             if (!entity.Has<Mover>())
                 return CommandResult.Rejected(MoveError.CannotMove);
 
-            _movement.SetDirection(entity, command.Direction);
+            _operations.SetDirection(entity, command.Direction);
             return CommandResult.Ok;
         }
     }
@@ -299,13 +304,13 @@ namespace CoinRush.Movement
 {
     internal sealed class MovementSystem : EntitySystem<Mover, Position>
     {
-        private readonly MovementOperations _movement;
+        private readonly MovementOperations _operations;
 
-        public MovementSystem(GameplayContext context, MovementOperations movement) : base(context) =>
-            _movement = movement;
+        public MovementSystem(GameplayContext context, MovementOperations operations) : base(context) =>
+            _operations = operations;
 
         protected override void Tick(Entity entity, Mover mover, Position position, float deltaTime) =>
-            _movement.Advance(mover, position, deltaTime);
+            _operations.Advance(mover, position, deltaTime);
     }
 }
 ```
@@ -437,19 +442,19 @@ namespace CoinRush.Coins
     {
         private readonly World _world;
         private readonly IEventBus _events;
-        private readonly MovementOperations _movement;
+        private readonly MovementOperations _movementOperations;
 
-        public CoinOperations(World world, IEventBus events, MovementOperations movement)
+        public CoinOperations(World world, IEventBus events, MovementOperations movementOperations)
         {
             _world = world;
             _events = events;
-            _movement = movement;
+            _movementOperations = movementOperations;
         }
 
         public Entity SpawnCoin(EntityDefinition coin, Vector2 at)
         {
             var entity = _world.Spawn(coin);
-            _movement.Place(entity, at);
+            _movementOperations.Place(entity, at);
             return entity;
         }
 
@@ -466,9 +471,13 @@ namespace CoinRush.Coins
 }
 ```
 
-Two habits to copy:
+Three habits to copy:
 - **The event is published right after the change, by the code that made it.** If `Collect` returns early for
   some reason, no event goes out, so nobody celebrates a coin that wasn't collected.
+- **Ask "what if this happens twice?"** For example, two players touch the same coin in the same frame. Here Mosaic
+  covers you: `coin.Destroy()` makes the coin unavailable immediately, so the second player's search doesn't find it,
+  and using the destroyed coin by mistake throws an `EntityNotAliveException` instead of paying twice. You don't need
+  an "already collected" flag. A test for exactly this case is in step 5.
 - **Coins don't set positions themselves.** `Position` belongs to movement, so coins ask `MovementOperations` to
   place the new coin. Each feature only changes its own components.
 
@@ -524,19 +533,19 @@ namespace CoinRush.Coins
 {
     internal sealed class CoinPickupSystem : EntitySystem<Wallet, Position>
     {
-        private readonly CoinOperations _coins;
+        private readonly CoinOperations _operations;
         private readonly CoinEvaluator _evaluator;
 
-        public CoinPickupSystem(GameplayContext context, CoinOperations coins, CoinEvaluator evaluator) : base(context)
+        public CoinPickupSystem(GameplayContext context, CoinOperations operations, CoinEvaluator evaluator) : base(context)
         {
-            _coins = coins;
+            _operations = operations;
             _evaluator = evaluator;
         }
 
         protected override void Tick(Entity collector, Wallet wallet, Position position, float deltaTime)
         {
             if (_evaluator.FindCoinNear(position.Value) is { } coin)
-                _coins.Collect(collector, coin);
+                _operations.Collect(collector, coin);
         }
     }
 }
@@ -545,10 +554,11 @@ namespace CoinRush.Coins
 The system decides *when*, the Evaluator answers *whether*, the Operations *do it*. Each class has one job, so each
 is easy to read and to test.
 
-> **Why can we destroy a coin while the system is still looping?** Every system tick runs as one *action*. During
-> an action, destroying entities and adding or removing components is put into a buffer and applied when the action
-> ends. That's what makes loops like this safe. The flip side: a destroyed coin still exists until the action ends,
-> so code in the same tick could still see it. Section 3.4 of the Design Guide explains this in detail.
+> **Why can we destroy a coin while the system is still looping?** Every system tick runs as one *action*. A
+> destroyed entity disappears for everyone at once: `Get` returns `null`, queries and systems skip it, commands to it
+> are rejected. Its memory is cleaned up only when the action ends, so the loops that are running don't break.
+> Adding and removing components works differently: those changes wait for the end of the action. Section 3.4 of
+> the Design Guide explains why.
 
 ### 3.6 Queries
 
@@ -611,18 +621,18 @@ namespace CoinRush
         public const float Height = 9;
 
         private readonly World _world;
-        private readonly MovementOperations _movement;
-        private readonly CoinOperations _coins;
+        private readonly MovementOperations _movementOperations;
+        private readonly CoinOperations _coinOperations;
         private readonly EntityDefinition _player;
         private readonly EntityDefinition _coin;
         private readonly Random _random;
 
-        public FieldOperations(World world, MovementOperations movement, CoinOperations coins,
+        public FieldOperations(World world, MovementOperations movementOperations, CoinOperations coinOperations,
             EntityDefinition player, EntityDefinition coin, int seed)
         {
             _world = world;
-            _movement = movement;
-            _coins = coins;
+            _movementOperations = movementOperations;
+            _coinOperations = coinOperations;
             _player = player;
             _coin = coin;
             _random = new Random(seed);
@@ -631,11 +641,11 @@ namespace CoinRush
         public Entity SpawnPlayer()
         {
             var player = _world.Spawn(_player);
-            _movement.Place(player, Vector2.Zero);
+            _movementOperations.Place(player, Vector2.Zero);
             return player;
         }
 
-        public Entity SpawnCoin(Vector2 at) => _coins.SpawnCoin(_coin, at);
+        public Entity SpawnCoin(Vector2 at) => _coinOperations.SpawnCoin(_coin, at);
 
         public void ScatterCoins(int count)
         {
@@ -673,22 +683,22 @@ namespace CoinRush
             var events = Context.Events;
 
             // Movement
-            var movement = new MovementOperations();
-            new MovementCommandHandler(Context, movement);
-            var movementSystem = new MovementSystem(Context, movement);
+            var movementOperations = new MovementOperations();
+            new MovementCommandHandler(Context, movementOperations);
+            var movementSystem = new MovementSystem(Context, movementOperations);
 
             // Coins
-            var coins = new CoinOperations(world, events, movement);
-            var pickup = new CoinPickupSystem(Context, coins, new CoinEvaluator(world));
+            var coinOperations = new CoinOperations(world, events, movementOperations);
+            var pickupSystem = new CoinPickupSystem(Context, coinOperations, new CoinEvaluator(world));
 
             // Field
-            Field = new FieldOperations(world, movement, coins, player, coin, seed);
+            Field = new FieldOperations(world, movementOperations, coinOperations, player, coin, seed);
 
             // Tick order: move first, then pick up coins at the new position.
             _systems = new ISystem[]
             {
                 movementSystem,
-                pickup,
+                pickupSystem,
             };
 
             // What the outside world may read.
@@ -821,6 +831,19 @@ namespace CoinRush.Tests
 
             Assert.That(_collected, Is.Empty);
             Assert.That(_match.Coins.CoinsLeft, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Two_collectors_touching_one_coin_get_it_once()
+        {
+            var second = default(EntityId);
+            _match.Context.Simulation.Run(() => second = _match.Field.SpawnPlayer().Id);
+            SpawnCoinAt(new Vector2(0.3f, 0));
+
+            Tick(0.02f);
+
+            Assert.That(_collected, Has.Count.EqualTo(1));
+            Assert.That(_match.Coins.CoinsOf(_match.Player) + _match.Coins.CoinsOf(second), Is.EqualTo(5));
         }
 
         [Test]
@@ -1095,7 +1118,7 @@ Domain (CoinRush.Game)                 Presentation (CoinRush.Unity)
 
 ### 7.1 Domain states
 
-`Game/Flow/GameFlow.cs`
+`Game/Flow/GameFlowContext.cs`
 
 ```csharp
 using System;
@@ -1104,13 +1127,13 @@ using Mosaic.Core;
 namespace CoinRush.Flow
 {
     /// <summary>What all states share: the state machine, the content and what outlives a match.</summary>
-    public sealed class GameFlow
+    public sealed class GameFlowContext
     {
         private readonly EntityDefinition _player;
         private readonly EntityDefinition _coin;
         private readonly ILog _log;
 
-        public GameFlow(StateMachine<GameState> states, EntityDefinition player, EntityDefinition coin, ILog log = null)
+        public GameFlowContext(StateMachine<GameState> states, EntityDefinition player, EntityDefinition coin, ILog log = null)
         {
             States = states;
             _player = player;
@@ -1124,12 +1147,12 @@ namespace CoinRush.Flow
         internal CoinRushMatch CreateMatch() => new CoinRushMatch(_player, _coin, seed: Environment.TickCount, log: _log);
     }
 
-    /// <summary>Base class of the game's states: gives every state access to the shared GameFlow.</summary>
+    /// <summary>Base class of the game's states: gives every state access to the shared GameFlowContext.</summary>
     public abstract class GameState : FlowState<GameState>
     {
-        protected GameState(GameFlow flow) : base(flow.States) => Flow = flow;
+        protected GameState(GameFlowContext context) : base(context.States) => Context = context;
 
-        protected GameFlow Flow { get; }
+        protected GameFlowContext Context { get; }
     }
 }
 ```
@@ -1143,18 +1166,18 @@ namespace CoinRush.Flow
 {
     public sealed class MenuState : GameState
     {
-        public MenuState(GameFlow flow) : base(flow) { }
+        public MenuState(GameFlowContext context) : base(context) { }
 
-        public int BestScore => Flow.BestScore;
+        public int BestScore => Context.BestScore;
 
-        public void Play() => Go(new PlayState(Flow, Flow.CreateMatch()));
+        public void Play() => Go(new PlayState(Context, Context.CreateMatch()));
     }
 
     public sealed class PlayState : GameState
     {
         public const float Duration = 30;
 
-        public PlayState(GameFlow flow, CoinRushMatch match) : base(flow) => Match = match;
+        public PlayState(GameFlowContext context, CoinRushMatch match) : base(context) => Match = match;
 
         public CoinRushMatch Match { get; }
         public float TimeLeft => Math.Max(0, Duration - Match.Time);
@@ -1169,17 +1192,17 @@ namespace CoinRush.Flow
                 return;
 
             var coins = Match.Coins.CoinsOf(Match.Player);
-            var isBest = coins > Flow.BestScore;
+            var isBest = coins > Context.BestScore;
             if (isBest)
-                Flow.BestScore = coins;
+                Context.BestScore = coins;
 
-            Go(new ResultState(Flow, coins, isBest));
+            Go(new ResultState(Context, coins, isBest));
         }
     }
 
     public sealed class ResultState : GameState
     {
-        public ResultState(GameFlow flow, int coins, bool isBest) : base(flow)
+        public ResultState(GameFlowContext context, int coins, bool isBest) : base(context)
         {
             Coins = coins;
             IsBest = isBest;
@@ -1188,9 +1211,9 @@ namespace CoinRush.Flow
         public int Coins { get; }
         public bool IsBest { get; }
 
-        public void PlayAgain() => Go(new PlayState(Flow, Flow.CreateMatch()));
+        public void PlayAgain() => Go(new PlayState(Context, Context.CreateMatch()));
 
-        public void BackToMenu() => Go(new MenuState(Flow));
+        public void BackToMenu() => Go(new MenuState(Context));
     }
 }
 ```
@@ -1204,7 +1227,7 @@ Things to notice:
   middle of a tick (for example, from an event listener) would end the match while the world is half-updated.
 - **The match starts in `OnEnter`**, not in the constructor and not in a screen. The constructor only stores what it
   was given; a state does its work only while it is active.
-- **The best score is a game rule,** so it lives in the domain (`GameFlow.BestScore`), not in the results screen.
+- **The best score is a game rule,** so it lives in the domain (`GameFlowContext.BestScore`), not in the results screen.
 
 ### 7.2 Test the flow
 
@@ -1231,7 +1254,7 @@ namespace CoinRush.Tests
             _states = new StateMachine<GameState>();
             var player = new EntityDefinition(1, "Player", new IEntityPart[] { new MoverDefinition(), new WalletDefinition() });
             var coin = new EntityDefinition(2, "Coin", new IEntityPart[] { new CoinDefinition() });
-            _states.Change(new MenuState(new GameFlow(_states, player, coin)));
+            _states.Change(new MenuState(new GameFlowContext(_states, player, coin)));
         }
 
         private void Tick(float seconds)
@@ -1442,7 +1465,7 @@ namespace CoinRush.View
         {
             _layers = new UiLayers(_uiRoot);
             _states = new StateMachine<GameState>();
-            var flow = new GameFlow(_states, _content.Player.ToDefinition(), _content.Coin.ToDefinition(), new UnityLog());
+            var context = new GameFlowContext(_states, _content.Player.ToDefinition(), _content.Coin.ToDefinition(), new UnityLog());
 
             _screens = new ScreenStateMachine(_layers);
             _screens.Map<MenuState>(state => new MenuScreen(state, _screenPrefabs));
@@ -1450,7 +1473,7 @@ namespace CoinRush.View
             _screens.Map<ResultState>(state => new ResultScreen(state, _screenPrefabs));
             _states.Changed += _screens.FollowDomain;
 
-            _states.Change(new MenuState(flow));
+            _states.Change(new MenuState(context));
         }
 
         private void Update()
@@ -1481,7 +1504,7 @@ How it fits together:
 2. `Map<TState>` tells the screen machine which screen to show for each domain state.
 3. `_states.Changed += _screens.FollowDomain` connects them: every time the domain changes state, the screen
    machine closes all windows and switches to the matching screen.
-4. `_states.Change(new MenuState(flow))` starts the game in the menu.
+4. `_states.Change(new MenuState(context))` starts the game in the menu.
 5. `Update` ticks UI input first, then the current screen (which turns keys into commands), then the game.
 
 **Checkpoint.** Press Play: menu, 30 seconds of collecting coins, results, play again. That's a complete game.
@@ -1562,7 +1585,7 @@ You now know every part of a Mosaic game. A few ideas to practice, roughly from 
 4. **Enemies that also collect coins.** Give an enemy a `Mover` and a `Wallet` in its config, and a system that sends
    it `MoveCommand`s toward the nearest coin. You will find that coins need no changes at all.
 5. **Save the best score.** Use `FileDataStorage` from `Mosaic.Infrastructure` behind the `IDataStorage`
-   interface, and let `GameFlow` load and save it. The domain only sees the interface.
+   interface, and let `GameFlowContext` load and save it. The domain only sees the interface.
 
 Where to read more:
 - [Design Guide](DesignGuide.md): everyday decisions with "don't / what goes wrong / do / why" examples. Read the

@@ -29,7 +29,53 @@ The main rule: **the domain does not know about Unity.** The whole game logic th
 regular .NET in a fraction of a second, the same way a server would build it. Inside Unity this is enforced by
 `noEngineReferences` in the asmdef; outside Unity, by a `dotnet test` project that compiles the domain folder.
 
-## 2. Roles
+## 2. Mosaic and ECS
+
+Mosaic borrows the core ideas of ECS (Entity Component System), but it is not a classic ECS like Unity DOTS,
+Entitas, LeoECS or Morpeh. If you know one of those, this section tells you what will feel familiar and what works
+differently, and why.
+
+### What Mosaic takes from ECS
+
+- **Entities are ids.** An `EntityId` is an index plus a generation number. It has no data and no behaviour of its
+  own, and a stale id is never mistaken for a new entity that reused the slot.
+- **Composition instead of inheritance.** What an entity is comes from the components attached to it. A player and
+  a turret are not subclasses of `Actor`: they are different sets of components.
+- **Systems iterate over component sets.** `EntitySystem<Health, Position>` runs for every entity that has both.
+  `World.Query<...>()` does the same in any code.
+- **Structural changes are deferred.** Adding and removing components is buffered while code runs, like command
+  buffers in DOTS, so loops over entities are safe. Destroying is the exception: the entity becomes unavailable at
+  once, and only its memory is released later (see section 5).
+- **Data-driven content.** An entity config is a list of parts, and each part creates one component. A new kind of
+  entity is often a new config with no new code.
+
+### Where Mosaic differs, and why
+
+| | Classic ECS | Mosaic | Why |
+|---|---|---|---|
+| **Components** | plain structs, no logic | classes that protect their own rules through `internal` methods (`Health.TakeDamage` never goes below zero) | a rule like "health is between 0 and max" lives next to the data, in one place, instead of being repeated in every system that touches health |
+| **Who may change data** | any system can write any component | only the **Operations** of the owning feature; systems, handlers and reactions call them | in a growing game, "any system writes anything" makes it impossible to say who changed a value; one owner per component gives one place for its rules and its events |
+| **Logic outside systems** | almost everything is a system | several small roles: CommandHandler, Operations, Evaluator, Queries, System, Reaction | each role answers one question (may it happen? change it, calculate it, show it, when over time, what follows from it), which keeps classes small and reviews simple |
+| **Input from the outside** | written into input components that systems read | **commands** sent through one bus, accepted or rejected with a reason | the player, AI, cheats and network go through the same checks; a rejection reason reaches the UI; commands can be recorded and replayed |
+| **Reacting to changes** | tag components, change filters or reactive systems that poll for them | **events**: small structs with the values of the moment, delivered after the action | features stay independent (combat doesn't know about loot), and the UI gets "how much damage" without comparing frames |
+| **Sync points** | command buffers are played back at chosen points in the frame | every command and every system tick is one **action**: added and removed components become visible when it ends (and again after each event subscriber); a destroyed entity is unavailable at once | the rule "changes are visible after the action" is simple enough to keep in your head, and Mosaic reports reads that break it |
+| **Storage** | archetypes and chunks (DOTS) or sparse sets (LeoECS, Morpeh) | a sparse set per component type; queries walk the smallest set | adding and removing components is cheap (no copying between archetypes), which suits gameplay where states come and go often |
+| **Performance target** | hundreds of thousands of entities, jobs and Burst | thousands to tens of thousands of entities, one thread | gameplay logic with rules, events and readable code; most games never need more, and the parts that do (particles, crowds) can use DOTS next to Mosaic |
+| **System order** | attributes, groups or registration order | one explicit list in the composition root | the order is a game rule; written in one place it is visible in a review |
+| **World access** | often a global or default world | `GameplayContext` passed through constructors, no static state | a match, its replay and every test have their own world side by side |
+| **Reading from outside** | presentation reads components directly | presentation reads **Queries** that return snapshots | presentation cannot change the game by accident, and a feature can change its components without breaking the UI |
+| **Unity integration** | DOTS converts GameObjects into entities (baking); other ECS libraries often keep entity logic and GameObjects side by side | the domain has no Unity at all; views follow entities through `ViewSpawner` | game rules build and run in plain .NET: tests in milliseconds, exact replays, a possible headless server |
+
+### When to choose what
+
+- **Mosaic**: games where most of the code is rules and their interactions (combat, inventory, abilities, waves,
+  progression) and you want them readable, testable and replayable.
+- **DOTS or another performance-first ECS**: simulations with very large numbers of similar entities where every
+  microsecond matters (crowds, bullet hell, large-scale physics).
+- **Both**: Mosaic for the gameplay rules, DOTS for a heavy subsystem that the rules talk to through Operations or
+  a port.
+
+## 3. Roles
 
 | Role | Purpose | May | May not |
 |---|---|---|---|
@@ -55,11 +101,12 @@ Why:
 The `CommandHandler` and `Reaction` base classes give no access to the event bus. The other rules rely on `internal`
 and reviews; it is worth locking them with architecture tests in your game that check the compiled IL.
 
-## 3. Life of an action
+## 4. Life of an action
 
 An action is a command or one system tick. `Simulation` runs it like this:
 
-1. The action runs in **deferred mode**: Add, Remove and Destroy on existing entities are buffered.
+1. The action runs in **deferred mode**: Add and Remove on existing entities are buffered. Destroy takes effect at
+   once; only the entity's slot is released at the end.
 2. When the action ends, the buffer is applied and `EntitySpawned` / `EntityDestroyed` are published.
 3. Events are delivered in order. The buffer is applied again after each subscriber, so the next subscriber sees
    the consequences of the previous one.
@@ -82,7 +129,7 @@ Tick ProjectileSystem
 A `+` line is a published event, `A → B` means subscriber B received event A. Ticks and subscribers that did nothing
 are hidden; the Quiet ticks button shows them.
 
-## 4. Visibility inside an action
+## 5. Visibility inside an action
 
 The single most important thing to know about `World`:
 
@@ -90,7 +137,12 @@ The single most important thing to know about `World`:
 |---|---|
 | `Spawn` and Add/Remove on the new entity | **only `Get`**: the entity is being built (`IsBuilding`) and Operations finish it. It appears in `Query` after the action |
 | Add/Remove on an existing entity | **nobody**: everyone reads the old state until the action ends |
-| `Destroy` | nobody: the entity stays alive until the action ends |
+| `Destroy` | **everyone, at once**: `IsAlive` is false, `Get` returns `null`, queries and systems skip it, commands to it are rejected, and using it throws `EntityNotAliveException`. Its slot is released and `EntityDestroyed` is published when the action ends |
+
+**Why Destroy is different.** An entity that is gone must not be collected, hit or healed a second time by the
+next piece of code in the same action. Making it unavailable at once means no Operations has to guard against
+that with its own "already destroyed" flag. It stays safe for loops because Destroy only marks the entity; the
+components are removed from storage when the action ends.
 
 Reading a component that has a buffered Add or Remove is almost always a bug: the code expects the new state and sees
 the old one. `World` detects such reads (`StaleReads`): `GameplayContext` logs a warning in the editor and development
@@ -101,7 +153,7 @@ Changing components during a `foreach` over `Query` or inside an `EntitySystem` 
 (`Simulation.Run`, `Simulation.Tick`, command handling). Outside an action the iteration throws
 `InvalidOperationException`.
 
-## 5. Assembling the world and tick order
+## 6. Assembling the world and tick order
 
 The domain composition root (for example, a match class) creates a `GameplayContext`, then Operations, Evaluators,
 systems, handlers and reactions bottom-up along the dependency graph, and defines the tick order of systems.
@@ -119,7 +171,7 @@ Either way, three rules hold:
 2. **Tick order is defined in one place**, never a mix of an array and self-registering systems.
 3. **Dependencies stay explicit in constructors.** A module is a grouping, not a service locator.
 
-## 6. Adding a feature
+## 7. Adding a feature
 
 Using loot as an example:
 
@@ -137,13 +189,13 @@ Using loot as an example:
 7. **Presentation**: a presenter subscribes to events and reads Queries, input goes out as commands.
    Presentation cannot see Operations: they are `internal`.
 
-## 7. Debugging
+## 8. Debugging
 
 | Tool | Where | What it gives |
 |---|---|---|
 | Trace (`SimulationTrace`) | Window > Mosaic > Simulation > Trace | "what happened and why" tree, filter, pause, copy |
 | World inspector | same window > World | all entities, their components and property values, filter by name or component |
-| Stale reads | editor log | a warning with the component type and entity (see section 4) |
+| Stale reads | editor log | a warning with the component type and entity (see section 5) |
 | Match recording (`CommandRecording`) | game code | reproduce a bug from a file, regression tests |
 
 A world shows up in the window once the game registers it, for example on the gameplay screen:
@@ -180,7 +232,7 @@ final world, and `WorldFingerprint.Describe` dumps it as text for a diff.
 
 Limits: a match repeats **within the same build and content**; time steps are recorded as they were.
 
-## 8. Tests and performance
+## 9. Tests and performance
 
 - Core tests run in the Unity Test Runner (EditMode) once the package is listed in `"testables"` in
   `Packages/manifest.json`.

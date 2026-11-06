@@ -13,6 +13,20 @@ reference Unity, so the whole game can be built and tested with regular .NET, an
 - **Debugging**: simulation trace and world inspector in the editor, match recording and exact replay.
 - **UI shell**: screens that follow the domain state machine, windows, popups, input layers, entity views with pooling.
 
+## Mosaic and ECS
+
+Mosaic uses the core ideas of ECS: entities are ids, behaviour comes from composing components, systems iterate
+over component sets, and structural changes are deferred. It is **not** a performance-first ECS like DOTS. The
+differences are deliberate:
+
+- components are classes that protect their own rules, and only the Operations of the owning feature change them;
+- input enters through commands that can be rejected with a reason, and changes are announced with events;
+- every command and system tick is one action with simple visibility rules;
+- the target is thousands to tens of thousands of entities on one thread, with readable and testable rules.
+
+The full comparison, with the reason behind each difference, is in
+[Architecture, section 2](Documentation~/Architecture.md#2-mosaic-and-ecs).
+
 ## Documentation
 
 | Read | When |
@@ -90,11 +104,11 @@ internal sealed class HealthOperations
 
 internal sealed class HealthCommandHandler : CommandHandler
 {
-    private readonly HealthOperations _health;
+    private readonly HealthOperations _operations;
 
-    public HealthCommandHandler(GameplayContext context, HealthOperations health) : base(context)
+    public HealthCommandHandler(GameplayContext context, HealthOperations operations) : base(context)
     {
-        _health = health;
+        _operations = operations;
         On<HitCommand>(Hit);
     }
 
@@ -103,7 +117,7 @@ internal sealed class HealthCommandHandler : CommandHandler
         if (!target.Has<Health>())
             return CommandResult.Rejected(HitError.NoHealth);
 
-        _health.Damage(target, command.Amount);
+        _operations.Damage(target, command.Amount);
         return CommandResult.Ok;
     }
 }
@@ -113,8 +127,8 @@ Assembling and using the world:
 
 ```csharp
 var context = new GameplayContext();
-var health = new HealthOperations(context.Events);
-new HealthCommandHandler(context, health);
+var healthOperations = new HealthOperations(context.Events);
+new HealthCommandHandler(context, healthOperations);
 
 context.Events.Subscribe<Damaged>(e => UnityEngine.Debug.Log($"{e.Target} took {e.Amount}"));
 

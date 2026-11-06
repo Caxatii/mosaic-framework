@@ -24,7 +24,7 @@ same decisions come up.
 - Part 2. Commands and events: input that skips commands, objects in messages, rejection reasons, disguised orders,
   event payloads
 - Part 3. Entities, components and content: keeping ids, one big component, flag or component, reading a change
-  back, changing content at runtime
+  back, changing content at runtime, using an entity after it was destroyed
 - Part 4. Connecting features: direct call or Reaction, singletons, tick order, subscriptions, registering systems
 - Part 5. The domain and Unity: rules in MonoBehaviours, Unity time and random, Queries and snapshots, events or
   polling
@@ -51,7 +51,8 @@ If you remember only this page, you will avoid most problems.
 8. **No `UnityEngine` in the domain.** No `Time.time`, no `UnityEngine.Random`, no `MonoBehaviour`.
 9. **Dependencies come through constructors.** No singletons, no static "managers", no service locator.
 10. **If a feature is an optional consequence of another, connect them with a Reaction.**
-11. **A change to an existing entity becomes visible after the action ends.** Don't read it back right away.
+11. **Adding or removing a component becomes visible after the action ends; destroying an entity takes effect at
+    once.** Don't read a component back right after changing it, and don't use an entity after destroying it.
 12. **Every subscription has an owner that disposes it.**
 
 ---
@@ -107,6 +108,12 @@ reacted to.
 
 **Composition root**: the one place where all of these objects are created and connected (for example, the match class).
 
+**ECS (Entity Component System)**: an architecture where game objects are ids made of components and logic runs
+in systems. Mosaic uses these ideas but adds strict roles (Operations, commands, events) on top. If you come from
+DOTS, Entitas or LeoECS, read [Architecture, section 2](Architecture.md#2-mosaic-and-ecs): several habits from
+those frameworks (any system writes any component, input components, polling for changes) are exactly what this
+guide warns against, and the section explains why.
+
 **Domain**: all of the above. The part of the game that does not depend on Unity.
 
 **Presentation**: everything the player sees and hears: views, presenters, UI. It depends on the domain, never the
@@ -144,10 +151,13 @@ commands.Send(new UseItemCommand(player, slot));
 // domain: the handler decides, Operations change
 private CommandResult UseItem(Entity user, UseItemCommand command)
 {
-    if (!_combat.IsAlive(user))
+    if (!_combatEvaluator.IsAlive(user))
         return CommandResult.Rejected(UseItemError.UserDead);
 
-    _health.Heal(user, potion.Amount, source: user.Id); // publishes Healed
+    if (_inventoryEvaluator.ItemIn(user, command.Slot)?.Get<HealOnUse>() is not { } potion)
+        return CommandResult.Rejected(UseItemError.NotUsable);
+
+    _healthOperations.Heal(user, potion.Amount, source: user.Id); // publishes Healed
     return CommandResult.Ok;
 }
 ```
@@ -180,7 +190,7 @@ nobody in Combat can find the cause, because it is not in Combat.
 ```csharp
 // ArenaOperations.cs
 var enemy = _world.Spawn(definition);
-_health.ScaleMax(enemy, difficulty.EnemyHealthMultiplier); // HealthOperations, owned by Combat
+_healthOperations.ScaleMax(enemy, _definition.EnemyHealthMultiplier); // owned by Combat
 ```
 
 **Why.** Each feature is the only author of its data. Other features may ask, but never write.
@@ -193,7 +203,7 @@ _health.ScaleMax(enemy, difficulty.EnemyHealthMultiplier); // HealthOperations, 
 
 ```csharp
 // CombatCommandHandler.cs
-_weapons.Fire(attacker, weapon, command.Direction);
+_weaponOperations.Fire(attacker, weapon, command.Direction);
 _events.Publish(new WeaponFired(attacker.Id)); // the handler announces the fact
 ```
 
@@ -245,9 +255,9 @@ when a window is open are among the hardest to find.
 **Do.** Split reading from changing.
 
 ```csharp
-var target = _combat.FindNearestUntargeted(seeker); // Evaluator: reads only
+var target = _combatEvaluator.FindNearestUntargeted(seeker); // reads only
 if (target is { } t)
-    _targeting.Lock(t, seeker);                     // Operations: changes and announces
+    _targetingOperations.Lock(t, seeker);                     // changes and announces
 ```
 
 **Why.** Evaluators and Queries are safe to call any number of times, from anywhere, in any order. That safety
@@ -397,7 +407,7 @@ _events.Publish(new DamageApplied(target.Id)); // "something happened, go look"
 
 ```csharp
 // presenter
-void OnDamage(DamageApplied e) => _bar.Set(_combat.StatusOf(e.Target).Health);
+void OnDamage(DamageApplied e) => _bar.Set(_combatQueries.StatusOf(e.Target).Health);
 ```
 
 **What goes wrong.** By the time the presenter runs, more may have happened in the same action: a heal, a second
@@ -447,7 +457,7 @@ public sealed class Homing : IModel
 // in the system
 if (!world.TryGetEntity(homing.Target, out var target))
 {
-    _missiles.Detonate(missile);   // the target is gone: decide what that means
+    _operations.Detonate(missile);   // the target is gone: decide what that means
     return;
 }
 ```
@@ -538,8 +548,9 @@ if (entity.Has<Poisoned>())
 them. The price is that changes show up when the action ends. If you need the new state, you already have it in a
 local variable, or you react to the event in a subscriber, which runs after the buffer is applied.
 
-> A newly spawned entity is the exception: Operations need to finish building it, so its own components are
-> visible through `Get` right away. Queries still see it only after the action.
+> Two exceptions. A newly spawned entity sees its own components through `Get` right away, because Operations need
+> to finish building it (queries still see it only after the action). And `Destroy` takes effect at once for
+> everyone, see 3.6.
 
 ## 3.5 Changing content at runtime
 
@@ -560,11 +571,60 @@ asset, and the next commit contains a "balance change" nobody made on purpose.
 plus modifiers when you need it.
 
 ```csharp
-var interval = weapon.Definition.FireInterval * _buffs.FireRateMultiplier(player); // Evaluator, read-only
+var interval = weapon.Definition.FireInterval * _buffEvaluator.FireRateMultiplier(player); // read-only
 ```
 
 **Why.** Definitions describe "what this kind of thing is". Components describe "how this particular one is doing
 right now". Mixing them means one entity's state leaks into all of them.
+
+## 3.6 Using an entity after it was destroyed
+
+**Situation.** Two players touch the same coin in the same frame, or a reaction runs for an enemy that another
+reaction has already removed.
+
+**Don't.** Protect every Operations with its own flag:
+
+```csharp
+public sealed class Coin : IModel
+{
+    public bool IsCollected { get; private set; }   // "just in case it gets collected twice"
+}
+```
+
+**What goes wrong.** Every feature invents its own flag (`IsCollected`, `IsDead`, `IsConsumed`), and every
+Evaluator and system must remember to check it. The one place that forgets pays a coin twice or heals a corpse.
+
+**What Mosaic does instead.** `Destroy` makes the entity unavailable for everyone at once: `IsAlive` is false,
+`Get` returns `null`, queries and systems skip it and commands to it are rejected. The second player's search
+doesn't find the coin. If code still holds the destroyed entity and uses it, it gets an `EntityNotAliveException`
+pointing at the exact line, instead of a silent double payment.
+
+**Do.** Read and check everything first, change after. Then a mistaken second call fails before it changes anything:
+
+```csharp
+public void Collect(Entity collector, Entity coin)
+{
+    var wallet = collector.Get<Wallet>();
+    var value = coin.Get<Coin>().Value;   // a destroyed coin fails here, before anything changed
+
+    wallet.Add(value);
+    coin.Destroy();
+    _events.Publish(new CoinCollected(collector.Id, value, wallet.Coins));
+}
+```
+
+If `wallet.Add` came first, a second call would pay and only then fail, leaving the game half-changed.
+
+Check `IsAlive` (or use `TryGetEntity`) only where an entity may **legitimately** be gone, for example an id kept
+from an earlier frame or an event about an entity another reaction may have removed:
+
+```csharp
+if (!World.TryGetEntity(e.Target, out var target))
+    return;   // already removed by someone else: nothing to do
+```
+
+**Why.** Code should not need to know about every other piece of code that might destroy the same entity. The world
+guarantees that a destroyed entity can't be used, and a bug that tries anyway is loud and easy to find.
 
 ---
 
@@ -594,18 +654,18 @@ loot, score and achievements. Removing achievements for a demo build means editi
 ```csharp
 internal sealed class DropLootReaction : Reaction
 {
-    private readonly InventoryOperations _inventory;
+    private readonly InventoryOperations _inventoryOperations;
 
-    public DropLootReaction(GameplayContext context, InventoryOperations inventory) : base(context)
+    public DropLootReaction(GameplayContext context, InventoryOperations inventoryOperations) : base(context)
     {
-        _inventory = inventory;
+        _inventoryOperations = inventoryOperations;
         On<EntityDied>(OnDied);
     }
 
     private void OnDied(EntityDied e)
     {
         if (World.Get<LootDrop>(e.Entity) is { } loot)
-            _inventory.SpawnLoot(loot, at: World.Get<Position>(e.Entity).Value);
+            _inventoryOperations.SpawnLoot(loot, at: World.Get<Position>(e.Entity).Value);
     }
 }
 ```
@@ -839,7 +899,7 @@ public sealed class Regeneration : IModel { ... }   // rate, delay, time since l
 internal sealed class RegenerationSystem : EntitySystem<Regeneration, Health>
 {
     protected override void Tick(Entity entity, Regeneration regen, Health health, float deltaTime) =>
-        _health.Regenerate(entity, regen, deltaTime);   // HealthOperations
+        _healthOperations.Regenerate(entity, regen, deltaTime);
 }
 ```
 
@@ -1351,6 +1411,17 @@ Good names make the role of a class obvious, so reviews and searches are faster.
 | System | what it ticks + `System` | `MovementSystem`, `ProjectileSystem` |
 | Reaction | what it does + `Reaction` | `DropLootReaction`, `AddScoreReaction` |
 
+**Fields that hold dependencies** are named by role when the class uses one of its own feature, and by feature
+and role otherwise:
+
+| The class uses | Field name | Examples |
+|---|---|---|
+| the Operations, Evaluator or Queries of its own feature, one of each | the role | `_operations`, `_evaluator`, `_queries` |
+| those of another feature, or several of the same role | feature + role | `_healthOperations`, `_combatEvaluator`, `_inventoryQueries` |
+
+Avoid fields like `_health`, `_coins` or `_combat` for these: they read like data ("the health", "a list of coins")
+rather than like the object that changes or calculates it.
+
 Evaluator methods read like questions or calculations (`IsAlive`, `FindNearestHostile`, `TotalDefence`).
 Operations methods read like actions (`ApplyDamage`, `Heal`, `StartReload`, `Despawn`).
 
@@ -1391,6 +1462,7 @@ When you see the symptom on the left, check the causes on the right first.
 | A dead or invalid entity can do something | input or a tool calls Operations directly, skipping the handler | 2.1 |
 | Replay diverges or a bug cannot be reproduced | input outside commands, Unity time or random in the domain, logic in a MonoBehaviour | 2.1, 5.1, 5.2 |
 | `Has<T>` / `Get<T>` returns the old value right after a change | buffered change read back in the same action (stale-read warning in the console) | 3.4 |
+| `EntityNotAliveException` | an entity is used after it was destroyed, often by a second call in the same frame | 3.6 |
 | All enemies of a type changed at once | a definition was modified at runtime | 3.5 |
 | Something targets or follows the wrong entity | an `Entity` or component kept in a field instead of an `EntityId` | 3.1 |
 | A bug appears only when a debug window or HUD is open | an Evaluator or Query changes state | 1.4 |
