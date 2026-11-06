@@ -1,6 +1,6 @@
 {
   "name": "com.mosaic.framework",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "displayName": "Mosaic Framework",
   "description": "Game architecture with the logic in plain C#: entities and components, command and event buses, simulation actions, state machines, match recording and replay, UI shell.",
   "unity": "2021.3",

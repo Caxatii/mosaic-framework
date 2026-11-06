@@ -44,15 +44,35 @@ The full comparison, with the reason behind each difference, is in
 ## Installation
 
 Unity 2021.3 or newer (tested on 6000.3; if something doesn't work on an older version, please open an issue).
-In **Window > Package Manager > + > Add package from git URL**:
+In **Window > Package Manager > + > Add package from git URL**, with the version you want after `#`:
 
 ```
-https://github.com/Caxatii/mosaic-framework.git
+https://github.com/Caxatii/mosaic-framework.git#v0.2.0
 ```
+
+Without `#v…` you get the latest `main`, which may contain unreleased changes. To update, change the tag in
+`Packages/manifest.json` and read the [changelog](CHANGELOG.md) first.
 
 Dependencies (`com.unity.ugui`, `com.unity.inputsystem`) are installed automatically. On Unity 2021 and 2022
 the project also needs the **TextMeshPro** package (it is installed in the default project templates; in Unity 6
 it is part of uGUI).
+
+## Versions
+
+Versions follow [Semantic Versioning](https://semver.org) as `vX.Y.Z`, with the usual rule for `0.x` while the API
+settles:
+
+| Release | Before 1.0 | From 1.0 |
+|---|---|---|
+| Breaking changes (see below) | `0.Y.0` | `X.0.0` |
+| New features, old code works as before | `0.Y.0` or `0.Y.Z` | `X.Y.0` |
+| Fixes only | `0.Y.Z` | `X.Y.Z` |
+
+Breaking means more than a changed signature: a public type or member removed or renamed, the same API behaving
+differently (marked **Behaviour change** in the changelog), saved data of the package (replays, versioned saves,
+input bindings) no longer readable, a changed GUID or serialized field name of a package asset, or a higher minimum
+Unity version. Members are marked `[Obsolete]` for at least one minor version before they are removed. Previews of
+coming features are tagged `vX.Y.Z-preview.N`.
 
 ## Quick start
 
