@@ -47,6 +47,51 @@ namespace Mosaic.Core.Tests
 #endif
         }
 
+        private sealed class Tag : IModel { }
+
+        [Test]
+        public void Spawning_and_destroying_inside_actions_allocates_only_the_components()
+        {
+#if UNITY_5_3_OR_NEWER
+            Assert.Ignore("Allocation checks run in dotnet test only");
+#else
+            const int perFrame = 20;
+            var context = new GameplayContext(NullLog.Instance);
+            var world = context.World;
+            var spawned = new EntityId[perFrame];
+            var tag = new Tag();
+            Action spawn = () =>
+            {
+                for (var i = 0; i < perFrame; i++)
+                {
+                    var entity = world.Spawn(1);
+                    entity.Add(tag);
+                    spawned[i] = entity.Id;
+                }
+            };
+            Action destroy = () =>
+            {
+                for (var i = 0; i < perFrame; i++)
+                    world.Destroy(spawned[i]);
+            };
+
+            void Frame()
+            {
+                context.Simulation.Run(spawn);
+                context.Simulation.Run(destroy);
+            }
+
+            Frame();
+            Frame();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 50; i++)
+                Frame();
+            var perEntity = (GC.GetAllocatedBytesForCurrentThread() - before) / (50.0 * perFrame);
+
+            Assert.That(perEntity, Is.LessThanOrEqualTo(32), "only the Kind component of each entity is allocated");
+#endif
+        }
+
         private enum PokeError { Busy }
 
         private readonly struct Poke : ICommand

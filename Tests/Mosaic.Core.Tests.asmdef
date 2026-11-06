@@ -3,6 +3,7 @@
     "rootNamespace": "Mosaic",
     "references": [
         "Mosaic.Core",
+        "Mosaic.Testing",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

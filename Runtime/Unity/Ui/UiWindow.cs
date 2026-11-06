@@ -80,6 +80,27 @@ namespace Mosaic.Ui
             return view;
         }
 
+        /// <summary>
+        /// An empty view to build in code (debug tools that assemble themselves). It is stretched over the window
+        /// layer and destroyed like a prefab view.
+        /// </summary>
+        protected RectTransform ShowEmpty(string name)
+        {
+            DestroyView();
+            var view = new GameObject(name, typeof(RectTransform));
+            var rect = (RectTransform)view.transform;
+            rect.SetParent(Layers.Root.WindowLayer, false);
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+            _view = view;
+            _viewComponent = rect;
+            _viewPrefab = null;
+            view.AddComponent<UiPointerDown>().Pressed += () => Layers.Focus(this);
+            return rect;
+        }
+
         protected internal virtual void Opened() { }
 
         protected internal virtual void Closed() { }

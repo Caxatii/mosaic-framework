@@ -25,6 +25,10 @@ namespace Mosaic.Core
 
         public SimulationTrace Trace { get; internal set; }
 
+        public ISimulationProfiler Profiler { get; internal set; }
+
+        private readonly System.Collections.Generic.Dictionary<Type, string> _systemNames = new System.Collections.Generic.Dictionary<Type, string>();
+
         public bool IsRunning => _depth > 0;
 
         public void Run(Action action)
@@ -77,7 +81,7 @@ namespace Mosaic.Core
         {
             if (_depth > 0)
             {
-                system.Tick(deltaTime);
+                TickProfiled(system, deltaTime);
                 return;
             }
 
@@ -87,7 +91,7 @@ namespace Mosaic.Core
             {
                 using (_world.Defer())
                 {
-                    system.Tick(deltaTime);
+                    TickProfiled(system, deltaTime);
                     Complete();
                 }
             }
@@ -99,6 +103,29 @@ namespace Mosaic.Core
         }
 
         private static string SystemLabel(ISystem system) => "Tick " + system.GetType().Name;
+
+        private void TickProfiled(ISystem system, float deltaTime)
+        {
+            var profiler = Profiler;
+            if (profiler == null)
+            {
+                system.Tick(deltaTime);
+                return;
+            }
+
+            if (!_systemNames.TryGetValue(system.GetType(), out var name))
+                _systemNames.Add(system.GetType(), name = SystemLabel(system));
+
+            profiler.Begin(name);
+            try
+            {
+                system.Tick(deltaTime);
+            }
+            finally
+            {
+                profiler.End();
+            }
+        }
 
         private void Complete()
         {

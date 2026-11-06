@@ -261,8 +261,8 @@ if (target is { } t)
 ```
 
 **Why.** Evaluators and Queries are safe to call any number of times, from anywhere, in any order. That safety
-disappears the moment one of them changes something. The architecture tests check this rule automatically if your
-game includes them.
+disappears the moment one of them changes something. `ArchitectureRules` from `Mosaic.Testing` checks this rule
+automatically once your game has an architecture test (see *7.5*).
 
 ---
 
@@ -626,6 +626,44 @@ if (!World.TryGetEntity(e.Target, out var target))
 **Why.** Code should not need to know about every other piece of code that might destroy the same entity. The world
 guarantees that a destroyed entity can't be used, and a bug that tries anyway is loud and easy to find.
 
+
+## 3.7 Timers and delays
+
+**Situation.** An ability has a cooldown, a grenade explodes three seconds after it is thrown.
+
+**Don't.** Write the same `TimeLeft -= deltaTime` in every model with its own rounding, or schedule a callback
+(`Delay(3, () => Explode(grenade))`).
+
+**What goes wrong.** Hand-written timers go negative, report "finished" twice or never, and a repeating one loses the
+overshoot every step. A callback can't be saved, replayed or seen in the World inspector, and it keeps running after
+the grenade is gone.
+
+**Do.** Keep a `Countdown` in the model and let a system advance it:
+
+```csharp
+public sealed class Fuse : IModel
+{
+    private Countdown _left;
+    public Fuse(float seconds) => _left = Countdown.Start(seconds);
+    internal bool Burn(float deltaTime)
+    {
+        _left = _left.Advance(deltaTime, out var exploded);
+        return exploded;
+    }
+}
+
+internal sealed class FuseSystem : EntitySystem<Fuse>
+{
+    protected override void Tick(Entity grenade, Fuse fuse, float deltaTime)
+    {
+        if (_grenades.Burn(grenade, deltaTime))       // Operations: changes the fuse, explodes, publishes
+            _grenades.Explode(grenade);
+    }
+}
+```
+
+**Why.** The delay is state like any other: saved, replayed, paused with the game, gone with its entity.
+
 ---
 
 # Part 4. Connecting features
@@ -864,6 +902,35 @@ The order now depends on the order constructors happen to run in, and there is a
 **Why.** One list, one place, one way of ticking: anyone can open the composition root and see every system the
 game runs and in what order. A system that is not in the list does not run, which is easy to spot in a review.
 
+
+## 4.6 A part that another feature has to serve
+
+**Situation.** A buff gets a new part, "freeze". The buff feature applies and removes buffs; what freezing does
+belongs to Spatial.
+
+**Don't.** Teach the buff feature about freezing (`if (part is Freeze) movement.Stop(...)`), or register the handler
+somewhere and hope nobody forgets it for the next part.
+
+**What goes wrong.** In the first case Buffs depends on every feature its parts touch. In the second a part
+without a handler does nothing, silently: the frost potion is in the game and does not work, and only a player
+notices.
+
+**Do.** Mark such parts with an interface, let the owning feature write the handler, register it in the composition
+root and check the content when the match is built.
+
+```csharp
+public interface IBuffEffectPart : IBuffPart { }
+public sealed class Freeze : IBuffEffectPart { public float Seconds; }
+
+internal sealed class FreezeEffect : BuffEffect<Freeze> { ... }       // Spatial, calls MovementOperations
+
+buffEffects.Register(new FreezeEffect(movementOperations));
+var missing = buffs.SelectMany(b => buffEffects.Unhandled<IBuffEffectPart>(b.Effects, b.Name)).ToList();
+```
+
+**Why.** `PartHandlers` keeps one handler per part type and finds the parts nobody serves; the match does not build
+until every one of them has a handler. Buffs stays unaware of freezing, as Combat stays unaware of loot (4.1).
+
 ---
 
 # Part 5. The domain and Unity
@@ -925,7 +992,8 @@ _endsAt = UnityEngine.Time.time + 5f;
 - Unity's global random is shared with particles, UI and everything else. A replay of the same match produces
   different shots, because some particle effect consumed a random number first.
 
-**Do.** Count time with the `deltaTime` the simulation gives you, and own a seeded random generator.
+**Do.** Count time with the `deltaTime` the simulation gives you, and take randomness from the match's
+`RandomStreams`: one named stream per feature.
 
 ```csharp
 public sealed class Buff : IModel
@@ -936,13 +1004,20 @@ public sealed class Buff : IModel
 
 internal sealed class BrainSystem : EntitySystem<Brain, Position>
 {
-    private readonly System.Random _random;   // created from the match seed in the composition root
+    private readonly GameRandom _random;   // random["ai"], from the match's RandomStreams
     ...
 }
+
+// composition root
+Random = new RandomStreams(definition.Seed);
+new BrainSystem(Context, ..., Random["ai"]);
+new LootDropReaction(Context, ..., Random["loot"]);
 ```
 
 **Why.** The simulation's time stops when the game is paused and replays exactly. A seeded generator owned by the
-match gives the same numbers every time the match is replayed.
+match gives the same numbers every time the match is replayed. Separate streams keep features apart: one more roll
+in loot doesn't change what the AI does. `RandomStreams.Capture()` goes into the save, so a continued game rolls the
+same dice as the one that was saved; `System.Random` can't do that because its state can't be saved.
 
 ## 5.3 Queries that return components
 
@@ -992,6 +1067,35 @@ it freezes when an event is missed after a reload of the scene.
 
 **Why.** Reading a snapshot each frame is simple and self-correcting. Events are precise about moments. Most
 screens use both: a bar reads `StatusOf` in `LateTick`, and a popup listens to `DamageApplied`.
+
+
+## 5.5 Presentation subscribed to the domain bus
+
+**Situation.** The inventory screen opens a "pick up?" prompt when an item lands next to the player, and the
+answer goes out as a command.
+
+**Don't.**
+
+```csharp
+_subscription = match.Context.Events.Subscribe<ItemPlacedInWorld>(e => _commands.Send(new PickUpCommand(player, e.Item)));
+```
+
+**What goes wrong.** A bus subscriber runs inside the action that published the event, so the command counts as part
+of the simulation. It is not recorded, and a replay, which has no presentation, never sends it: the replay diverges,
+and the bug report it came with is useless. It also changes the world in the middle of an action that the domain
+thought was its own.
+
+**Do.** Presentation listens through an `EventFeed` and delivers it after the match has ticked.
+
+```csharp
+_events = new EventFeed(match.Context);
+_subscription = _events.Subscribe<ItemPlacedInWorld>(OnItemPlaced);
+
+protected override void LateTick(float deltaTime) => _events.Deliver();
+```
+
+**Why.** Feed subscribers run outside the simulation: a command they send is ordinary input, recorded and replayed.
+The bus stays for the domain (reactions, game flow), whose subscribers exist in a replay too.
 
 ---
 
@@ -1179,12 +1283,16 @@ protected override void PauseRequested(bool requested)
 }
 
 // GameplayState
+public GameClock Clock { get; } = new GameClock();
 public bool CanPause => true;                 // false in a network match
-public bool IsPaused => CanPause && _pauseHolds > 0;
+public IDisposable HoldPause() => Clock.HoldPause();
+protected override void Tick(float deltaTime) => Match.Tick(Clock.Advance(deltaTime));
 ```
 
 **Why.** A pause is held for as long as anyone needs it, and released only when the last holder lets go. Holds are
 `IDisposable`, so a window that closes for any reason (Escape, screen change, an exception) releases its hold.
+`GameClock` does the counting, and slow motion and hit stops go through it the same way (`SlowDown`), so they stop
+the simulation, not the menus.
 
 ## 6.6 Keeping the match in a static field
 
@@ -1390,6 +1498,30 @@ commands (2.1), Unity time or random in the domain (5.2), or logic in a MonoBeha
 When "something happened and I don't know why", open **Window > Mosaic > Simulation**, press **Record**, reproduce,
 press **Pause** and filter by the entity id or event name. The trace shows which command or system started it and
 which reaction made the next change. Set breakpoints only after you know which class to look at.
+
+## 7.5 Lock the roles with an architecture test
+
+Most role rules rely on `internal` and reviews. Add one test class that checks the compiled game with
+`ArchitectureRules` from `Mosaic.Testing` (reference the `Mosaic.Testing` assembly from your test assembly):
+
+```csharp
+public sealed class ArchitectureTests
+{
+    private static readonly ArchitectureRules Rules = new ArchitectureRules(typeof(Match).Assembly, typeof(World).Assembly)
+    {
+        Exclude = type => type.Namespace == "MyGame.Cheats",   // code that bypasses roles on purpose
+    };
+
+    [Test]
+    public void Roles_hold() => Assert.That(Rules.CheckAll(), Is.Empty);
+
+    [Test]
+    public void Scanner_sees_operations() => Assert.That(Rules.ScannerSeesOperations(), Is.Empty);
+}
+```
+
+A violation is either a bug or a sign the rule should change, together with this guide. One test per rule (the
+methods behind `CheckAll`) gives clearer failures in a large game.
 
 ---
 

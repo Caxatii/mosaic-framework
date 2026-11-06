@@ -171,5 +171,50 @@ namespace Mosaic.Core.Tests
             Assert.That(GC.GetAllocatedBytesForCurrentThread() - before, Is.Zero);
 #endif
         }
+        [Test]
+        public void Without_skips_entities_having_the_excluded_components()
+        {
+            var a = Spawn(new A());
+            Spawn(new A(), new B());
+            Spawn(new A(), new C());
+            var ab = Spawn(new A(), new B());
+            ab.Add(new C());
+
+            Assert.That(_world.Query<A>().Without<B>().Without<C>().Select(e => e.Id), Is.EqualTo(new[] { a.Id }));
+            Assert.That(_world.Query<A, B>().Without<C>().Count(), Is.EqualTo(1));
+            Assert.That(_world.Query<A, C>().Without<B>().Count(), Is.EqualTo(1));
+            Assert.That(_world.Query<A>().Without<NeverAdded>().Count(), Is.EqualTo(4), "a type never added excludes nothing");
+            Assert.Throws<InvalidOperationException>(() => _world.Query<A>().Without<B>().Without<C>().Without<A>());
+        }
+
+        private sealed class NeverAdded : IModel { }
+
+        [Test]
+        public void Single_finds_the_one_entity_and_refuses_ambiguity()
+        {
+            Assert.That(_world.TryGetSingle<C>(out _), Is.False);
+            Assert.Throws<InvalidOperationException>(() => _world.Single<C>());
+
+            var c = Spawn(new C());
+            Assert.That(_world.Single<C>().Id, Is.EqualTo(c.Id));
+
+            Spawn(new C());
+            Assert.Throws<InvalidOperationException>(() => _world.TryGetSingle<C>(out _));
+        }
+
+        [Test]
+        public void Single_does_not_see_an_entity_spawned_in_the_same_action()
+        {
+            var seen = true;
+            _context.Simulation.Run(() =>
+            {
+                var c = _world.Spawn(1);
+                c.Add(new C());
+                seen = _world.TryGetSingle<C>(out _);
+            });
+
+            Assert.That(seen, Is.False);
+            Assert.That(_world.TryGetSingle<C>(out _), Is.True);
+        }
     }
 }

@@ -12,7 +12,7 @@ namespace Mosaic.Ui
         private readonly List<UiWindow> _windows = new List<UiWindow>();
         private readonly List<UiPopup> _popups = new List<UiPopup>();
         private readonly List<UiOverlay> _overlays = new List<UiOverlay>();
-        private readonly List<(Key Key, UiWindow Window)> _hotkeys = new List<(Key, UiWindow)>();
+        private readonly List<(Func<bool> Pressed, UiWindow Window)> _hotkeys = new List<(Func<bool>, UiWindow)>();
         private readonly List<UiWindow> _keptViews = new List<UiWindow>();
 
         private UiScreen _screen;
@@ -41,7 +41,36 @@ namespace Mosaic.Ui
 
         public bool IsBlocked => _popups.Count > 0 || _windows.FindLastIndex(IsModal) >= 0;
 
-        public void Bind(Key key, UiWindow window) => _hotkeys.Add((key, window));
+        public void Bind(Key key, UiWindow window) =>
+            _hotkeys.Add((() => Keyboard.current is { } keyboard && keyboard[key].wasPressedThisFrame, window));
+
+        /// <summary>
+        /// A hotkey from an Input System action, so it works with a gamepad and follows rebinding. The action is
+        /// enabled here.
+        /// </summary>
+        public void Bind(InputAction action, UiWindow window)
+        {
+            if (action == null)
+                throw new ArgumentNullException(nameof(action));
+
+            action.Enable();
+            _hotkeys.Add((action.WasPressedThisFrame, window));
+        }
+
+        /// <summary>
+        /// An extra action that works as Escape (a gamepad's B or Start button). The Escape key always works.
+        /// </summary>
+        public InputAction EscapeAction
+        {
+            get => _escapeAction;
+            set
+            {
+                _escapeAction = value;
+                _escapeAction?.Enable();
+            }
+        }
+
+        private InputAction _escapeAction;
 
         public bool Open(UiWindow window)
         {
@@ -134,13 +163,12 @@ namespace Mosaic.Ui
 
         public void Tick(float deltaTime)
         {
-            if (Keyboard.current is { } keyboard)
-            {
-                if (keyboard.escapeKey.wasPressedThisFrame)
-                    RouteEscape();
-                else
-                    RouteHotkeys(keyboard);
-            }
+            var escape = Keyboard.current is { } keyboard && keyboard.escapeKey.wasPressedThisFrame ||
+                         _escapeAction != null && _escapeAction.WasPressedThisFrame();
+            if (escape)
+                RouteEscape();
+            else
+                RouteHotkeys();
 
             for (var i = _windows.Count - 1; i >= 0; i--)
                 if (i < _windows.Count)
@@ -194,14 +222,14 @@ namespace Mosaic.Ui
                 _screen?.HandleEscape();
         }
 
-        private void RouteHotkeys(Keyboard keyboard)
+        private void RouteHotkeys()
         {
             if (_popups.Count > 0)
                 return;
 
-            foreach (var (key, window) in _hotkeys)
+            foreach (var (pressed, window) in _hotkeys)
             {
-                if (!keyboard[key].wasPressedThisFrame)
+                if (!pressed())
                     continue;
 
                 if (Focused is { CapturesKeyboard: true } && Focused != window)

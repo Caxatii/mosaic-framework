@@ -31,6 +31,9 @@ namespace Mosaic.Core
         private readonly List<EntityId> _spawned = new();
 
         private readonly Dictionary<int, Dictionary<Type, IModel>> _building = new();
+        private readonly Stack<Dictionary<Type, IModel>> _buildingPool = new();
+        private readonly List<EntityId> _drainedSpawned = new();
+        private readonly List<EntityId> _drainedDestroyed = new();
 
         private readonly HashSet<(int Index, Type Type)> _pendingByType = new();
 
@@ -50,7 +53,7 @@ namespace Mosaic.Core
 
             var entity = CreateEntity();
             if (IsDeferred)
-                _building.Add(entity.Id.Index, new Dictionary<Type, IModel>());
+                _building.Add(entity.Id.Index, _buildingPool.Count > 0 ? _buildingPool.Pop() : new Dictionary<Type, IModel>());
 
             Add(entity.Id, new Kind(kind));
             _spawned.Add(entity.Id);
@@ -225,6 +228,29 @@ namespace Mosaic.Core
             where T3 : class, IModel =>
             new EntityQuery<T1, T2, T3>(this, StoreOf<T1>(), StoreOf<T2>(), StoreOf<T3>());
 
+        /// <summary>
+        /// The one entity that has <typeparamref name="T"/>, for service entities like a wave state. False if there is
+        /// none; throws if there are several. Sees what Query sees: not an entity spawned in the current action.
+        /// </summary>
+        public bool TryGetSingle<T>(out Entity entity) where T : class, IModel
+        {
+            entity = default;
+            var found = false;
+            foreach (var candidate in Query<T>())
+            {
+                if (found)
+                    throw new InvalidOperationException($"More than one entity has {typeof(T).Name}");
+
+                entity = candidate;
+                found = true;
+            }
+
+            return found;
+        }
+
+        public Entity Single<T>() where T : class, IModel =>
+            TryGetSingle<T>(out var entity) ? entity : throw new InvalidOperationException($"No entity has {typeof(T).Name}");
+
         public DeferScope Defer()
         {
             _deferDepth++;
@@ -255,30 +281,36 @@ namespace Mosaic.Core
 
             _pending.Clear();
             _pendingByType.Clear();
+            foreach (var building in _building.Values)
+            {
+                building.Clear();
+                _buildingPool.Push(building);
+            }
             _building.Clear();
         }
 
+        /// <summary>
+        /// Entities spawned since the last call that are still alive. The list is reused: read it before the next call.
+        /// </summary>
         public IReadOnlyList<EntityId> DrainSpawned()
         {
-            if (_spawned.Count == 0)
-                return Array.Empty<EntityId>();
-
-            var result = new List<EntityId>(_spawned.Count);
+            _drainedSpawned.Clear();
             foreach (var id in _spawned)
                 if (IsAlive(id))
-                    result.Add(id);
+                    _drainedSpawned.Add(id);
             _spawned.Clear();
-            return result;
+            return _drainedSpawned;
         }
 
+        /// <summary>
+        /// Entities whose slots were released since the last call. The list is reused: read it before the next call.
+        /// </summary>
         public IReadOnlyList<EntityId> DrainDestroyed()
         {
-            if (_destroyed.Count == 0)
-                return Array.Empty<EntityId>();
-
-            var result = _destroyed.ToArray();
+            _drainedDestroyed.Clear();
+            _drainedDestroyed.AddRange(_destroyed);
             _destroyed.Clear();
-            return result;
+            return _drainedDestroyed;
         }
 
         private void TrackPending(EntityId id, Type type)

@@ -60,6 +60,50 @@ namespace Mosaic.Core.Tests
             TestContext.Out.WriteLine($"  Get<T> by id           {lookups,8:0.0} ms  ({lookups * 1000 / frames:0} us/frame)");
         }
 
+        [Serializable]
+        private sealed class PositionPart : IEntityPart { public IModel CreateModel() => new Position(); }
+
+        [Serializable]
+        private sealed class VelocityPart : IEntityPart { public IModel CreateModel() => new Velocity(); }
+
+        [Serializable]
+        private sealed class HealthPart : IEntityPart { public IModel CreateModel() => new Health(); }
+
+        [Test]
+        public void Spawning_projectiles()
+        {
+            const int perFrame = 50;
+            const int frames = 200;
+            var context = new GameplayContext();
+            var world = context.World;
+            var projectile = new EntityDefinition(1, "Projectile", new IEntityPart[] { new PositionPart(), new VelocityPart(), new HealthPart() });
+            var spawned = new EntityId[perFrame];
+            Action spawn = () =>
+            {
+                for (var i = 0; i < perFrame; i++)
+                    spawned[i] = world.Spawn(projectile).Id;
+            };
+            Action destroy = () =>
+            {
+                for (var i = 0; i < perFrame; i++)
+                    world.Destroy(spawned[i]);
+            };
+
+            var time = Measure(() =>
+            {
+                for (var f = 0; f < frames; f++)
+                {
+                    context.Simulation.Run(spawn);
+                    context.Simulation.Run(destroy);
+                }
+            }, out var bytes);
+
+            var entities = perFrame * frames;
+            TestContext.Out.WriteLine($"{entities} projectiles spawned and destroyed in actions (3 parts each):");
+            TestContext.Out.WriteLine($"  {time * 1000 / entities:0.00} us and {bytes / (double)entities:0} bytes per projectile " +
+                                      "(the Kind and the three components themselves)");
+        }
+
         private static double Measure(Action action, out long allocated)
         {
             action();

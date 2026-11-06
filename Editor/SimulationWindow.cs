@@ -12,7 +12,7 @@ namespace Mosaic.Editor
 {
     public sealed class SimulationWindow : EditorWindow
     {
-        private static readonly string[] Tabs = { "Trace", "World" };
+        private static readonly string[] Tabs = { "Trace", "World", "Stats" };
 
         private int _tab;
         private int _worldIndex;
@@ -23,6 +23,7 @@ namespace Mosaic.Editor
         private TraceRecord[] _frozen;
         private EntityId? _selected;
         private GUIStyle _mono;
+        private readonly Dictionary<GameplayContext, SimulationStats> _stats = new Dictionary<GameplayContext, SimulationStats>();
 
         [MenuItem("Window/Mosaic/Simulation")]
         public static void Open() => GetWindow<SimulationWindow>("Simulation");
@@ -54,7 +55,7 @@ namespace Mosaic.Editor
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
                 _worldIndex = EditorGUILayout.Popup(_worldIndex, worlds.Select(w => w.Name).ToArray(), EditorStyles.toolbarPopup, GUILayout.Width(160));
-                _tab = GUILayout.Toolbar(_tab, Tabs, EditorStyles.toolbarButton, GUILayout.Width(220));
+                _tab = GUILayout.Toolbar(_tab, Tabs, EditorStyles.toolbarButton, GUILayout.Width(240));
                 GUILayout.FlexibleSpace();
                 _filter = GUILayout.TextField(_filter, EditorStyles.toolbarSearchField, GUILayout.Width(200));
             }
@@ -62,8 +63,10 @@ namespace Mosaic.Editor
             var world = worlds[_worldIndex];
             if (_tab == 0)
                 DrawTrace(world.Context);
-            else
+            else if (_tab == 1)
                 DrawWorld(world);
+            else
+                DrawStats(world.Context);
         }
 
         private void DrawTrace(GameplayContext context)
@@ -111,6 +114,70 @@ namespace Mosaic.Editor
 
                 GUILayout.Label($"#{record.Frame}", EditorStyles.miniBoldLabel);
                 GUILayout.Label(text.TrimEnd(), _mono);
+            }
+            EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawStats(GameplayContext context)
+        {
+            _stats.TryGetValue(context, out var stats);
+            using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
+            {
+                var measuring = stats != null;
+                if (GUILayout.Toggle(measuring, "Measure", EditorStyles.toolbarButton, GUILayout.Width(70)) != measuring)
+                {
+                    if (measuring)
+                    {
+                        context.Profiler = SimulationProfiler.Without(context.Profiler, stats);
+                        _stats.Remove(context);
+                        stats = null;
+                    }
+                    else
+                    {
+                        stats = new SimulationStats();
+                        context.Profiler = SimulationProfiler.Combine(context.Profiler, stats);
+                        _stats[context] = stats;
+                    }
+                }
+
+                if (GUILayout.Button("Reset", EditorStyles.toolbarButton, GUILayout.Width(60)))
+                    stats?.Reset();
+
+                GUILayout.FlexibleSpace();
+                if (stats != null && GUILayout.Button("Copy", EditorStyles.toolbarButton, GUILayout.Width(80)))
+                    EditorGUIUtility.systemCopyBuffer = string.Join("\n", stats.Snapshot().Select(e => e.ToString()));
+            }
+
+            if (stats == null)
+            {
+                EditorGUILayout.HelpBox("Press Measure to time every system tick, command and event subscriber of this world. " +
+                                        "For the Unity Profiler, set context.Profiler = new UnityProfiler() in the game.", MessageType.None);
+                return;
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.Label("Work", EditorStyles.miniBoldLabel);
+                GUILayout.Label("Calls", EditorStyles.miniBoldLabel, GUILayout.Width(70));
+                GUILayout.Label("Total ms", EditorStyles.miniBoldLabel, GUILayout.Width(80));
+                GUILayout.Label("Avg µs", EditorStyles.miniBoldLabel, GUILayout.Width(70));
+                GUILayout.Label("Max µs", EditorStyles.miniBoldLabel, GUILayout.Width(70));
+            }
+
+            _scroll = EditorGUILayout.BeginScrollView(_scroll);
+            foreach (var entry in stats.Snapshot())
+            {
+                if (_filter.Length > 0 && entry.Name.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Label(entry.Name, _mono);
+                    GUILayout.Label(entry.Calls.ToString(), _mono, GUILayout.Width(70));
+                    GUILayout.Label(entry.TotalMilliseconds.ToString("0.00"), _mono, GUILayout.Width(80));
+                    GUILayout.Label((entry.AverageMilliseconds * 1000).ToString("0.0"), _mono, GUILayout.Width(70));
+                    GUILayout.Label((entry.MaxMilliseconds * 1000).ToString("0.0"), _mono, GUILayout.Width(70));
+                }
             }
             EditorGUILayout.EndScrollView();
         }

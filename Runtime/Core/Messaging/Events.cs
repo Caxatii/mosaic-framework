@@ -8,11 +8,17 @@ namespace Mosaic.Core
     {
     }
 
-    public interface IEventBus
+    /// <summary>
+    /// Something events can be received from: the domain EventBus, or an EventFeed for presentation.
+    /// </summary>
+    public interface IEventSource
+    {
+        IDisposable Subscribe<T>(Action<T> handler) where T : struct, IEvent;
+    }
+
+    public interface IEventBus : IEventSource
     {
         void Publish<T>(in T message) where T : struct, IEvent;
-
-        IDisposable Subscribe<T>(Action<T> handler) where T : struct, IEvent;
     }
 
     public readonly struct EntitySpawned : IEvent
@@ -56,6 +62,8 @@ namespace Mosaic.Core
 
         internal SimulationTrace Trace { get; set; }
 
+        internal ISimulationProfiler Profiler { get; set; }
+
         public void Publish<T>(in T message) where T : struct, IEvent
         {
             Trace?.Line("+ " + TraceFormat.Of(message));
@@ -90,6 +98,13 @@ namespace Mosaic.Core
 
                 _order.Dequeue().DeliverNext(this, afterEachSubscriber);
             }
+        }
+
+        internal void ClearPending()
+        {
+            foreach (var channel in _channels.Values)
+                channel.ClearPending();
+            _order.Clear();
         }
 
         private Channel<T> ChannelOf<T>() where T : struct, IEvent
@@ -149,6 +164,8 @@ namespace Mosaic.Core
 
                         var trace = bus.Trace;
                         trace?.Enter(typeof(T).Name + " → " + subscription.Owner, quiet: true);
+                        var profiler = bus.Profiler;
+                        profiler?.Begin(subscription.ProfileName);
                         try
                         {
                             subscription.Handler(message);
@@ -160,6 +177,7 @@ namespace Mosaic.Core
                         }
                         finally
                         {
+                            profiler?.End();
                             trace?.Exit();
                         }
 
@@ -202,6 +220,8 @@ namespace Mosaic.Core
 
                 public Action<T> Handler { get; }
                 public string Owner => TraceFormat.OwnerOf(Handler);
+                public string ProfileName => _profileName ??= typeof(T).Name + " → " + Owner;
+                private string _profileName;
                 public bool IsDisposed { get; private set; }
 
                 public void Dispose()

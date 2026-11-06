@@ -1,60 +1,30 @@
-using System;
-using System.IO;
 using Mosaic.Core;
 using UnityEngine;
 
 namespace Mosaic.Infrastructure
 {
-    public sealed class FileDataStorage : IDataStorage
+    /// <summary>
+    /// Documents as JSON files in Application.persistentDataPath ({prefix}{key}.json), written with JsonUtility.
+    /// </summary>
+    public sealed class FileDataStorage : DataStorage
     {
-        private readonly ILog _log;
-        private readonly string _prefix;
-
         public FileDataStorage(ILog log, string prefix = "mosaic_")
+            : base(new FileTextStore(Application.persistentDataPath, prefix), new JsonUtilitySerializer(), log)
         {
-            _log = log;
-            _prefix = prefix;
         }
+    }
 
-        public bool TryLoad<T>(string key, out T data) where T : class
-        {
-            data = null;
-            var path = PathOf(key);
-            if (!File.Exists(path))
-                return false;
+    /// <summary>
+    /// ISerializer on top of JsonUtility: [Serializable] classes with public fields, no null nested objects.
+    /// </summary>
+    public sealed class JsonUtilitySerializer : ISerializer
+    {
+        private readonly bool _prettyPrint;
 
-            try
-            {
-                data = JsonUtility.FromJson<T>(File.ReadAllText(path));
-                return data != null;
-            }
-            catch (Exception exception)
-            {
-                _log.Error($"Failed to read {path}", exception);
-                return false;
-            }
-        }
+        public JsonUtilitySerializer(bool prettyPrint = true) => _prettyPrint = prettyPrint;
 
-        public void Save<T>(string key, T data) where T : class
-        {
-            var path = PathOf(key);
-            try
-            {
-                File.WriteAllText(path, JsonUtility.ToJson(data, prettyPrint: true));
-            }
-            catch (Exception exception)
-            {
-                _log.Error($"Failed to write {path}", exception);
-            }
-        }
+        public string Write(object data) => JsonUtility.ToJson(data, _prettyPrint);
 
-        public void Delete(string key)
-        {
-            var path = PathOf(key);
-            if (File.Exists(path))
-                File.Delete(path);
-        }
-
-        private string PathOf(string key) => Path.Combine(Application.persistentDataPath, $"{_prefix}{key}.json");
+        public T Read<T>(string text) where T : class => JsonUtility.FromJson<T>(text);
     }
 }

@@ -91,6 +91,8 @@ namespace Mosaic.Core
             var external = !_simulation.IsRunning;
             var trace = _simulation.Trace;
             trace?.Enter(TraceFormat.Of(command), quiet: false);
+            var profiler = _simulation.Profiler;
+            profiler?.Begin(Route<TCommand>.Name);
 
             CommandResult result;
             try
@@ -101,6 +103,10 @@ namespace Mosaic.Core
             {
                 trace?.Exit(" → exception");
                 throw;
+            }
+            finally
+            {
+                profiler?.End();
             }
 
             trace?.Exit(" → " + result);
@@ -139,6 +145,8 @@ namespace Mosaic.Core
 
         private static class Route<TCommand> where TCommand : struct, ICommand
         {
+            public static readonly string Name = typeof(TCommand).Name;
+
             public static readonly Func<(ICommandHandler<TCommand> Handler, TCommand Command), CommandResult> Execute =
                 state => state.Handler.Handle(state.Command);
         }

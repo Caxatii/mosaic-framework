@@ -11,6 +11,11 @@ reference Unity, so the whole game can be built and tested with regular .NET, an
 - **Predictable actions**: each command or system tick runs as one `Simulation` action with clear visibility rules,
   and reads that miss a buffered change are reported.
 - **Debugging**: simulation trace and world inspector in the editor, match recording and exact replay.
+- **Game state that survives**: saves with atomic writes and version migrations, seeded random streams that are
+  saved with the game, loading through operations a game state polls (scenes, Resources, your own).
+- **Tests**: `Mosaic.Testing` checks the role rules against compiled code and records events for assertions.
+- **Everyday tools**: a cheat console and a cheat window built from one registration, sounds and effects bound
+  to events, rebindable controls saved as settings, a game clock with pause and slow motion, timers for models.
 - **UI shell**: screens that follow the domain state machine, windows, popups, input layers, entity views with pooling.
 
 ## Mosaic and ECS

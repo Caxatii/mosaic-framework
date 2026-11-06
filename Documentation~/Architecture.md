@@ -10,7 +10,9 @@ The package:
 
 ```
 Runtime/Core    Mosaic.Core          World, command and event buses, Simulation, state machines,
-                                     settings, match recording, tracing. No Unity.
+                                     settings, saves and migrations, random streams, loading,
+                                     match recording, tracing. No Unity.
+Runtime/Testing Mosaic.Testing       architecture rules, event recorder, test log. No Unity, editor only.
 Runtime/Unity   Mosaic.Unity         UI shell (screens, windows, popups), entity views and pooling,
                                      file storage, UnityLog, DebugWorlds.
 Editor          Mosaic.Unity.Editor  content inspectors, Window > Mosaic > Simulation.
@@ -99,7 +101,8 @@ Why:
   comes in as a parameter, and the compiler checks the assembly order.
 
 The `CommandHandler` and `Reaction` base classes give no access to the event bus. The other rules rely on `internal`
-and reviews; it is worth locking them with architecture tests in your game that check the compiled IL.
+and reviews; lock them with an architecture test in your game: `ArchitectureRules` from `Mosaic.Testing` checks
+the compiled IL (see Design Guide 7.5).
 
 ## 4. Life of an action
 
@@ -186,7 +189,8 @@ Using loot as an example:
 5. **Assembly**: create it in the composition root and put its systems into the tick order.
 6. **Test**: build the world without Unity, run the action through a command or `Simulation.Run`, check events or
    Queries.
-7. **Presentation**: a presenter subscribes to events and reads Queries, input goes out as commands.
+7. **Presentation**: a presenter subscribes to events through an `EventFeed` and reads Queries, input goes out
+   as commands. The feed delivers events after the simulation, so a command a presenter sends is recorded input.
    Presentation cannot see Operations: they are `internal`.
 
 ## 8. Debugging
@@ -195,6 +199,8 @@ Using loot as an example:
 |---|---|---|
 | Trace (`SimulationTrace`) | Window > Mosaic > Simulation > Trace | "what happened and why" tree, filter, pause, copy |
 | World inspector | same window > World | all entities, their components and property values, filter by name or component |
+| Stats (`SimulationStats`) | same window > Stats | time per system, command and subscriber, the most expensive first |
+| Unity Profiler (`UnityProfiler`) | `context.Profiler = new UnityProfiler()` | the same work as markers in the Unity Profiler, also on devices |
 | Stale reads | editor log | a warning with the component type and entity (see section 5) |
 | Match recording (`CommandRecording`) | game code | reproduce a bug from a file, regression tests |
 
@@ -234,6 +240,8 @@ Limits: a match repeats **within the same build and content**; time steps are re
 
 ## 9. Tests and performance
 
+- `Mosaic.Testing` gives game tests the architecture rules (`ArchitectureRules`), `EventRecorder<T>`, `TestLog` and
+  `TickLoop`; it builds without Unity, so the same tests run in `dotnet test`.
 - Core tests run in the Unity Test Runner (EditMode) once the package is listed in `"testables"` in
   `Packages/manifest.json`.
 - `WorldBenchmark` (`[Explicit]`) measures systems, queries and `Get` on 5,000 and 50,000 entities. Allocation
@@ -243,6 +251,9 @@ Limits: a match repeats **within the same build and content**; time steps are re
   the others are checked by index.
 - Reference numbers on .NET (Release): a two-component `EntitySystem` takes about 60 µs per frame for 5,000 entities
   and about 320 µs for 50,000. Mono in the editor is several times slower.
+- Spawning and destroying inside actions allocates only the components themselves: a projectile with three parts
+  costs about 1.6 µs and 128 bytes for spawn and destroy together (.NET, Release). Pooling components is not worth
+  its risks at that cost.
 - Components are classes, so cache use is worse than in DOTS. The target is thousands to tens of thousands of
   entities, not hundreds of thousands.
 - Command and event buses do not allocate per message. Tracing and recording do, so keep them for debugging.

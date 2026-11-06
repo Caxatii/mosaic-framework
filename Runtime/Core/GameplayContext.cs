@@ -31,6 +31,17 @@ namespace Mosaic.Core
         public CommandBus Commands { get; }
         public ILog Log { get; }
 
+        /// <summary>Receives the time of every system tick, command and event subscriber; null (default) costs nothing.</summary>
+        public ISimulationProfiler Profiler
+        {
+            get => Simulation.Profiler;
+            set
+            {
+                Simulation.Profiler = value;
+                EventBus.Profiler = value;
+            }
+        }
+
         public SimulationTrace Trace
         {
             get => Simulation.Trace;

@@ -626,7 +626,7 @@ namespace CoinRush
         private readonly CoinOperations _coinOperations;
         private readonly EntityDefinition _player;
         private readonly EntityDefinition _coin;
-        private readonly Random _random;
+        private readonly GameRandom _random;
 
         public FieldOperations(World world, MovementOperations movementOperations, CoinOperations coinOperations,
             EntityDefinition player, EntityDefinition coin, int seed)
@@ -636,7 +636,7 @@ namespace CoinRush
             _coinOperations = coinOperations;
             _player = player;
             _coin = coin;
-            _random = new Random(seed);
+            _random = new GameRandom(seed);
         }
 
         public Entity SpawnPlayer()
@@ -659,8 +659,9 @@ namespace CoinRush
 }
 ```
 
-The random generator is created from a **seed** and owned by the game. Don't use `UnityEngine.Random` here: the game
-assembly can't see Unity anyway, and a seeded generator gives the same coins every time you replay a match.
+The random generator (`GameRandom`) is created from a **seed** and owned by the game. Don't use `UnityEngine.Random`
+here: the game assembly can't see Unity anyway, and a seeded generator gives the same coins every time you replay a
+match. Its whole state is one number, so it can also be saved with the game (see `RandomStreams` in the Reference).
 
 ### 4.2 The match class
 
@@ -932,6 +933,7 @@ Change `Value`. No code involved.
 ```csharp
 using System;
 using CoinRush.Coins;
+using Mosaic.Core;
 using Mosaic.Ui;
 using TMPro;
 
@@ -942,6 +944,7 @@ namespace CoinRush.View
         private readonly CoinRushMatch _match;
         private readonly TMP_Text _score;
         private readonly ViewPool _pool = new ViewPool();
+        private readonly EventFeed _events;
         private readonly ViewSpawner _spawner;
         private readonly IDisposable _coinCollected;
 
@@ -950,8 +953,9 @@ namespace CoinRush.View
             _match = match;
             _score = score;
 
-            _spawner = new ViewSpawner(match.Context.World, match.Context.Events, content.PrefabOf, null, _pool);
-            _coinCollected = match.Context.Events.Subscribe<CoinCollected>(OnCoinCollected);
+            _events = new EventFeed(match.Context);
+            _spawner = new ViewSpawner(match.Context.World, _events, content.PrefabOf, null, _pool);
+            _coinCollected = _events.Subscribe<CoinCollected>(OnCoinCollected);
 
             _spawner.CatchUp();
             ShowScore(match.Coins.CoinsOf(match.Player));
@@ -959,6 +963,8 @@ namespace CoinRush.View
 
         public void LateTick()
         {
+            _events.Deliver();
+
             foreach (var view in _spawner.Views.All)
                 if (_match.Movement.PositionOf(view.Id) is { } position)
                     view.transform.position = position.ToUnity();
@@ -968,6 +974,7 @@ namespace CoinRush.View
         {
             _coinCollected.Dispose();
             _spawner.Dispose();
+            _events.Dispose();
             _pool.Dispose();
         }
 
@@ -983,6 +990,9 @@ namespace CoinRush.View
 ```
 
 What each part does:
+- **`EventFeed`** collects the game's events while the match ticks and hands them out in `LateTick`, after the
+  simulation. Presentation always listens through a feed, never to `Context.Events` directly: a command sent from a
+  feed subscriber is ordinary input and gets into match recordings (*Design Guide 5.5*).
 - **`ViewSpawner`** watches the world. When an entity appears, it takes the prefab for its kind from a pool and puts
   it in the scene; when the entity is destroyed, the view goes back to the pool. You never instantiate entity
   views yourself.
@@ -992,7 +1002,8 @@ What each part does:
   things that change continuously, like positions.
 - **The score** listens to `CoinCollected`. Listening to an event is right for things that change at a moment.
   The event already has the total, so there is no need to ask the game.
-- **`Dispose`** releases everything: the subscription, the spawner and the pool (which destroys the views).
+- **`Dispose`** releases everything: the subscription, the spawner, the feed and the pool (which destroys the
+  views).
   Every `Subscribe` needs someone who disposes it.
 
 ### 6.3 Input: from keys to commands
@@ -1586,7 +1597,8 @@ You now know every part of a Mosaic game. A few ideas to practice, roughly from 
 4. **Enemies that also collect coins.** Give an enemy a `Mover` and a `Wallet` in its config, and a system that sends
    it `MoveCommand`s toward the nearest coin. You will find that coins need no changes at all.
 5. **Save the best score.** Use `FileDataStorage` from `Mosaic.Infrastructure` behind the `IDataStorage`
-   interface, and let `GameFlowContext` load and save it. The domain only sees the interface.
+   interface, and let `GameFlowContext` load and save it. The domain only sees the interface. Give the saved class a
+   `Version` field and load it through `SaveMigrations` from the start, so the format can change later.
 
 Where to read more:
 - [Design Guide](DesignGuide.md): everyday decisions with "don't / what goes wrong / do / why" examples. Read the

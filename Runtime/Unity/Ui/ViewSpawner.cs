@@ -14,7 +14,7 @@ namespace Mosaic.Ui
         private readonly ViewPool _pool;
         private readonly List<IDisposable> _subscriptions = new List<IDisposable>();
 
-        public ViewSpawner(World world, IEventBus events, Func<int, EntityView> prefabOf, Func<EntityId, bool> isVisible, ViewPool pool)
+        public ViewSpawner(World world, IEventSource events, Func<int, EntityView> prefabOf, Func<EntityId, bool> isVisible, ViewPool pool)
         {
             _world = world ?? throw new ArgumentNullException(nameof(world));
             _prefabOf = prefabOf ?? throw new ArgumentNullException(nameof(prefabOf));
