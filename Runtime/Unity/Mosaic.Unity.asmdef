@@ -1,0 +1,11 @@
+{
+    "name": "Mosaic.Unity",
+    "rootNamespace": "Mosaic",
+    "references": [
+        "Mosaic.Core",
+        "Unity.InputSystem",
+        "UnityEngine.UI",
+        "Unity.TextMeshPro"
+    ],
+    "autoReferenced": false
+}

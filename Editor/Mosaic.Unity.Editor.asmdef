@@ -1,0 +1,19 @@
+{
+    "name": "Mosaic.Unity.Editor",
+    "rootNamespace": "Mosaic.Editor",
+    "references": [
+        "Mosaic.Core",
+        "Mosaic.Unity"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

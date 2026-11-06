@@ -1,0 +1,29 @@
+{
+  "name": "com.mosaic.framework",
+  "version": "0.1.0",
+  "displayName": "Mosaic Framework",
+  "description": "Game architecture with the logic in plain C#: entities and components, command and event buses, simulation actions, state machines, match recording and replay, UI shell.",
+  "unity": "6000.3",
+  "license": "MIT",
+  "author": {
+    "name": "Caxatii"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Caxatii/mosaic-framework.git"
+  },
+  "documentationUrl": "https://github.com/Caxatii/mosaic-framework#readme",
+  "changelogUrl": "https://github.com/Caxatii/mosaic-framework/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/Caxatii/mosaic-framework/blob/main/LICENSE.md",
+  "keywords": [
+    "architecture",
+    "ecs",
+    "framework",
+    "events",
+    "commands"
+  ],
+  "dependencies": {
+    "com.unity.ugui": "2.0.0",
+    "com.unity.inputsystem": "1.19.0"
+  }
+}
